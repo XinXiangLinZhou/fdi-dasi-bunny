@@ -71,6 +71,3 @@ def buzon(data: IncomingMessage):
 
 if __name__ == "__main__":
     main()
-
-if __name__ == "__main__":
-    main()
