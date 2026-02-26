@@ -1,4 +1,4 @@
-import requests
+'''import requests
 #from fastapi import FastAPI
 def main():
     print("Hello from fdi-dasi-bunny!")
@@ -40,6 +40,37 @@ print(jugadores)
 
 
 print(gente.text)
+'''
+
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+import requests
+app=FastAPI()
+
+class IncomingMessage(BaseModel):
+    message:str
+
+@app.post("/buzon")
+
+async def buzon(request: Request):
+    client_ip=request.client.host
+    print(client_ip)
+    #print(request.msg)
+def buzon(data: IncomingMessage):
+    print("recibido: ",data.message)
+    try:
+        r=requests.post(
+            json={"msg":"¿Que recursos tienes?"},
+            verify=False
+        )
+    except Exception as e:
+        print("Error:",e)
+    return{"status":"ok"}
+
+
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
