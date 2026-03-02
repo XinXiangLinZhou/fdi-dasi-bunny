@@ -6,3 +6,6 @@ git commit -m “”
 git pull
 git push
 gh auth logout
+
+
+modelo ollama ministral-3:86
