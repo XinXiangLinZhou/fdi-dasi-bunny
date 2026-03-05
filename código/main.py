@@ -4,21 +4,36 @@ import requests
 
 app = FastAPI()
 
-# SERVER_URL = "http://147.96.81.252:7719/"
-# #post name
-# name=requests.post(SERVER_URL+"alias/bunny")
-# #get info
-# info=requests.get(SERVER_URL+"info")
-# informacion=info.json()
-# recursos=informacion["Recursos"]
-# objetivo=informacion["Objetivo"]
-# #print(recursos["queso"],objetivo)
-# #get gente
-# gente=requests.get(SERVER_URL+"gente")
-# personas=gente.json()
-# jugadores={}
-# jugadores={p["alias"]:p["ip"] for p in personas}
+SERVER_URL = "http://147.96.81.252:7719/"
 
+#post name
+def postName():
+    if(getGente["bunny"]==None):
+        name=requests.post(SERVER_URL+"alias/bunny")
+#get info
+def getInfo():
+    info=requests.get(SERVER_URL+"info")
+    informacion=info.json()
+# get Recursos
+def getRecursos():
+    informacion=getInfo()
+    recursos=informacion["Recursos"]
+    return recursos
+#get Objetivos
+def getObjetivo():
+    informacion=getInfo
+    objetivo=informacion["Objetivo"]
+    return objetivo
+#get gente, obtenemos los ip y nombre de los jugadores
+def getGente():
+    gente=requests.get(SERVER_URL+"gente")
+    personas=gente.json()
+    jugadores={}
+    jugadores={p["alias"]:p["ip"] for p in personas}
+    return jugadores
+
+
+#mensaje formato json
 class Mensaje(BaseModel):
     msg: str
 
@@ -50,7 +65,8 @@ async def buzon(request: Request, mensaje: Mensaje):
 
 
 if __name__ == "__main__":
+
     import uvicorn
-    uvicorn.run("main:app", host="147.96.84.78", port=7720, reload=True)
+    uvicorn.run("main:app", host=getGente["bunny"], port=7720, reload=True)
 
 
