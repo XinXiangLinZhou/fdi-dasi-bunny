@@ -11,6 +11,8 @@
     git commit -m "commit"
   6. subir codigo
     git push
+  7. Logout
+    gh auth logout
 
 
 -uv
