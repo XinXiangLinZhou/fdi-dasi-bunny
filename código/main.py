@@ -8,7 +8,7 @@ app = FastAPI()
 
 SERVER_URL = "http://147.96.81.252:7719/"
 ip_time={}
-#hacer ping cada 30s
+#hacer ping cada 60s
 sleep_time=30
 #si no responde en 60s, cierrar conexion
 ping_time=60
@@ -31,7 +31,7 @@ def getRecursos():
     return recursos
 #get Objetivos
 def getObjetivo():
-    informacion=getInfo
+    informacion=getInfo()
     objetivo=informacion["Objetivo"]
     return objetivo
 #get gente, obtenemos los ip y nombre de los jugadores
@@ -41,7 +41,7 @@ def getGente():
     jugadores = {}
     for p in personas:
         jugadores[p["alias"]] = p["ip"]
-        if p["alias"] == "bunny":
+        if p["alias"] != "bunny":
             list_ip.update([p["ip"]])
     return jugadores
 
@@ -72,32 +72,37 @@ def update_ip():
     global list_ip
     try:
         gente = getGente()
-        list_ip=set(gente.values())
     except Exception as e:
         print("Error updating IP list:", e)
 def ping(ip,msg):
     url = f"http://{ip}:7720/buzon"
+
     try:
-        r = requests.post(url, json=msg, timeout=3)
-        result = r.json()
+        r = requests.post(url, json=msg, timeout=2)
+
         if r.status_code == 200:
             ip_time[ip] = time.time()
-    except Exception:
-        pass
-    time.sleep(ping_time)
-    return result
+            return r.json()
+
+    except requests.exceptions.Timeout:
+        print(f"{ip} no responde (timeout)")
+
+    except requests.exceptions.RequestException as e:
+        print("Ping error:", e)
+
+    return None
 def loop(msg):
     while True:
+        update_ip()
         for ip in list_ip:
             #si no responde en 60s, cierrar conexion
             if ip not in ip_time or time.time() - ip_time[ip] > ping_time:
                 print(f"IP {ip} is not responding.")
                 ip_time[ip] = time.time()  # Mark as not responding
-            elif time.time() - ip_time[ip] > sleep_time:
-                continue
+            # elif time.time() - ip_time[ip] > sleep_time:
+            #     continue
             else:
                 ping(ip,msg)
-        time.sleep(sleep_time)
 if __name__ == "__main__":
     import uvicorn
     postName()
