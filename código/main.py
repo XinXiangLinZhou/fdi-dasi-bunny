@@ -23,6 +23,7 @@ def postName():
 def getInfo():
     info=requests.get(SERVER_URL+"info")
     informacion=info.json()
+    return informacion
 # get Recursos
 def getRecursos():
     informacion=getInfo()
@@ -81,7 +82,7 @@ def ping(ip,msg):
         result = r.json()
         if r.status_code == 200:
             ip_time[ip] = time.time()
-    except Exception as e:
+    except Exception:
         pass
     time.sleep(ping_time)
     return result
@@ -96,7 +97,7 @@ def loop(msg):
                 continue
             else:
                 ping(ip,msg)
-    time.sleep(sleep_time)
+        time.sleep(sleep_time)
 if __name__ == "__main__":
     import uvicorn
     postName()
