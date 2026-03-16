@@ -1,0 +1,6 @@
+# 固定配置
+SERVER_URL = "http://147.96.81.252:7719/"
+SLEEP_TIME = 30
+PING_TIME = 60
+DEFAULT_PORT = 7720
+MY_ALIAS = "bunny"
