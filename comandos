@@ -28,3 +28,4 @@
     bin/ollama serve
   3. Ejecutar un modelo
     bin/ollama run qwen3
+  tool use/structuredoutputs
