@@ -8,4 +8,4 @@ git push
 gh auth logout
 
 
-modelo ollama ministral-3:86
+modelo ollama ministral-3:8B

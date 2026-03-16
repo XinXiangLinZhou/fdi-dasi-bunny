@@ -13,7 +13,7 @@ my_items={"manzana":1,"pera":2,"naranja":3}
 wanted_item={"pera":2, "naranja":1,"banana":1}
 
 OLLAMA_URL="http://localhost:11434/api/generate"
-DEFAULT_MODEL="qwen2.5:0.5b"
+DEFAULT_MODEL="ministral-3:8B"
 
 #recibir mensaje que comunica con nosotros
 @app.post("/buzon")
@@ -24,16 +24,16 @@ async def buzon(request: Request, mensaje: Mensaje):
     
     #instrucciones
     parse_prompt = f"""
-        Analiza el siguiente mensaje:
+       Devuelve **exclusivamente** una lista en formato JSON valido con 
+       el siguiente contenido 
+        "{my_items}"
+       
+       **No añadas texto adicional, comentarios ni explicaciones.** Solo la
+       lista en JSON puro. 
 
-        "{mensaje.msg}"
-        y repite lo que dice el mensaje
-        """    
-        # {{
-        # "has": [],
-        # "wants": []
-        # }}
-        #"""
+       """
+    
+    print(parse_prompt)
     
     #recibir resultado de ollama
     r = requests.post(
@@ -44,7 +44,14 @@ async def buzon(request: Request, mensaje: Mensaje):
             "stream": False
         }
     )
-    print(r)
+
+    reply_raw = r.json.get("response", "")
+
+    json_limpio = reply_raw[7:len(reply_raw) -4]
+    aux = json.loads(json_limpio)
+    print(aux)
+
+    '''
     try:
         parsed = json.loads(r.json().get("response", ""))
     except json.JSONDecodeError:
@@ -86,10 +93,10 @@ async def buzon(request: Request, mensaje: Mensaje):
         result = r.json()
     except Exception as e:
         result = {"error": str(e)}
-
+    '''
     return {
         "status": "ok",
-        "response": result
+        "response": "ok"
     }
 
 if __name__ == "__main__":
