@@ -1,9 +1,9 @@
 import time
 from fastapi import APIRouter, Request
 
-from app.models.message import Mensaje
+from app.models.mensaje import Mensaje
 from app.state import ip_time, list_ping
-from app.services.peer_api import ping
+from services.peer_api import ping
 
 router = APIRouter()
 

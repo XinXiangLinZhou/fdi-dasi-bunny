@@ -3,8 +3,8 @@ import uvicorn
 
 from app.main import app
 from app.config import DEFAULT_PORT, MY_ALIAS
-from app.services.server_api import post_name, get_gente
-from app.services.monitor import loop
+from services.server_api import post_name, get_gente
+from services.monitor import loop
 
 if __name__ == "__main__":
     post_name()

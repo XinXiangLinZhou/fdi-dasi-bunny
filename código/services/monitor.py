@@ -2,8 +2,8 @@ import time
 
 from app.config import MY_ALIAS, PING_TIME, SLEEP_TIME
 from app.state import ip_time, list_ip, list_ping, lock
-from app.services.server_api import get_gente
-from app.services.peer_api import ping
+from services.server_api import get_gente
+from services.peer_api import ping
 
 def update_ip():
     global list_ip, list_ping
