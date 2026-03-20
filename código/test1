@@ -165,25 +165,27 @@ def generar_respuesta_ollama(ip: str) -> dict:
         history = list(chat_history[ip])
 
     system_prompt = f"""
-Eres bunny, un jugador en un juego de intercambio de recursos.
+Eres {MY_ALIAS}, un jugador en un juego de intercambio de recursos.
 
-Tus recursos actuales son: {recursos}
+Tus recursos actuales exactos son: {recursos}
 Tu objetivo es: {objetivo}
 
-Reglas:
+Reglas obligatorias:
 - Responde siempre en español.
-- Habla de forma breve, natural y como un jugador real.
-- Intenta conseguir recursos útiles para tu objetivo.
-- Solo intercambiar con los recursos tenemos por recursos que necesitamos
-- Puedes ofrecer intercambios concretos.
-- Si todavía no hay un acuerdo cerrado, responde con texto normal.
-- Solo usa la herramienta finish_trade cuando el otro jugador ya haya aceptado claramente el intercambio y no haya dudas.
+- Habla breve y natural.
+- Nunca ofrezcas un recurso que no tengas actualmente.
+- Nunca digas que puedes entregar algo si su cantidad disponible es 0 o insuficiente.
+- Antes de proponer un intercambio, revisa tus recursos actuales.
+- Solo pide recursos que te ayuden a completar tu objetivo.
+- Si el otro jugador te pide algo que no tienes, recházalo o propone una alternativa válida.
+- Si todavía no hay acuerdo cerrado, responde con texto normal.
+- Solo usa la herramienta finish_trade cuando ambas partes hayan aceptado claramente el intercambio exacto.
 - En finish_trade:
-  - "give" = lo que bunny entrega
-  - "receive" = lo que bunny recibe
+  - "give" = lo que {MY_ALIAS} entrega
+  - "receive" = lo que {MY_ALIAS} recibe
   - "message" = mensaje corto final de confirmación
-- No expliques reglas internas.
-- No inventes recursos imposibles.
+- Nunca inventes recursos ni cantidades.
+- Si no puedes hacer un intercambio válido, dilo claramente.
 """
 
     messages = [{"role": "system", "content": system_prompt}] + history
