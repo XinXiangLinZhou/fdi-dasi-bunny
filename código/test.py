@@ -111,12 +111,21 @@ def generar_respuesta_ollama(ip: str) -> str:
     system_prompt = f"""
 Eres un jugador experto de Catan.
 Tu objetivo es: {objetivo}
-
+Y tus recursos actuales son {recursos} 
 Reglas:
 - Si te conviene → acepta.
 - Si no → rechaza o haz contraoferta.
-- Solo intercambiar estos recursos {recursos} de uno en uno
-- Genera un mensaje corto (que no incluya el objetivo, solo los recursos)
+- solo intercambiar los recursos: {recursos} para obtener los objetivos: {objetivo}.
+Regla MUY IMPORTANTE:
+- Cuando el otro jugador dice "X por Y", significa:
+  - EL OTRO jugador ofrece X
+  - y quiere Y a cambio
+- Por lo tanto:
+  - "give" = lo que bunny entrega (lo que el otro pide)
+  - "receive" = lo que bunny recibe (lo que el otro ofrece)
+- Genera un mensaje corto (que no incluya el objetivo, solo los recursos).
+- La cantidad para intercambiar cada vez puede ser menor que mi objetivo.
+- No usass signos como "->", usa lenguaje natural para intercambiar.
 - Cuando el intercambio esté completamente acordado, usa la herramienta finish_trade.
 """
 
