@@ -12,17 +12,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "finish_trade",
-            "description": f"Usa esta herramienta solo cuando el intercambio ya esté claramente aceptado por ambas partes. Registra lo que {MY_ALIAS} entrega y lo que {MY_ALIAS} recibe.",
+            "description": f"Usa esta herramienta solo cuando el intercambio ya esté claramente aceptado por ambas partes. El intercambio debe ser estrictamente 1 por 1: un solo recurso con cantidad 1 que {MY_ALIAS} entrega, y un solo recurso con cantidad 1 que {MY_ALIAS} recibe.",
             "parameters": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "give": {
                         "type": "object",
-                        "description": f"Recursos que {MY_ALIAS} entrega al otro jugador. Ejemplo: {{'madera': 1}}"
+                        "description": f"Exactamente un solo recurso que {MY_ALIAS} entrega, con cantidad 1. Ejemplo: {{'madera': 1}}"
                     },
                     "receive": {
                         "type": "object",
-                        "description": f"Recursos que {MY_ALIAS} recibe del otro jugador. Ejemplo: {{'piedra': 1}}"
+                        "description": f"Exactamente un solo recurso que {MY_ALIAS} recibe, con cantidad 1. Ejemplo: {{'piedra': 1}}"
                     },
                     "message": {
                         "type": "string",
@@ -96,6 +97,7 @@ def generar_respuesta_ollama(ip: str) -> dict:
     faltantes = calcular_faltantes(recursos, objetivo)
     ofrecibles = calcular_ofrecibles(recursos, objetivo)
     oro_disp = calcular_oro_disponible(recursos)
+    intercambios_validos = generar_intercambios_validos(recursos, objetivo)
 
     ensure_chat(ip)
 
@@ -116,15 +118,33 @@ def generar_respuesta_ollama(ip: str) -> dict:
         ORO DISPONIBLE:
         {oro_disp}
 
-        REGLAS:
-        - Nunca ofrezcas recursos que NO estén en "puedes ofrecer"
-        - Nunca ofrezcas recursos que necesitas
-        - Prioriza conseguir recursos faltantes
-        - Usa oro solo si es necesario
-        - Si no puedes aceptar, rechaza o contraoferta
-        - No inventes recursos
-        - Responde corto y natural
-        """
+        INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER:
+        {intercambios_validos}
+
+        REGLAS OBLIGATORIAS:
+        - SOLO puedes proponer intercambios 1 por 1
+        - SOLO un recurso en give y SOLO un recurso en receive
+        - La cantidad SIEMPRE debe ser 1
+        - Nunca ofrezcas recursos que NO estén en "RECURSOS QUE PUEDES OFRECER"
+        - Nunca ofrezcas recursos que todavía necesitas
+        - Nunca inventes recursos
+        - Nunca hagas intercambios de muchos por muchos
+        - Solo puedes proponer o aceptar intercambios que estén en "INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER"
+        - Solo usa finish_trade cuando el otro jugador ya haya aceptado claramente
+        - Si no puedes hacer un intercambio válido, responde con texto y haz una contraoferta simple
+        - Si no tienes ningún intercambio válido posible, responde solo con texto
+        - No uses oro en finish_trade
+
+        Ejemplo válido:
+        give={{"madera": 1}}
+        receive={{"piedra": 1}}
+
+        Ejemplo inválido:
+        give={{"madera": 2, "trigo": 1}}
+        receive={{"piedra": 3}}
+
+        Responde corto y natural.
+    """
 
     messages = [{"role": "system", "content": system_prompt}] + history
 
@@ -152,9 +172,15 @@ def generar_respuesta_ollama(ip: str) -> dict:
                 "tool_calls": msg["tool_calls"]
             }
 
+        content = msg.get("content", "")
+        if not isinstance(content, str):
+            content = ""
+
+        content = content.strip()
+
         return {
             "type": "text",
-            "content": msg.get("content", "").strip() or "¿Qué recursos tienes para intercambiar?"
+            "content": content or "¿Qué recursos tienes para intercambiar?"
         }
 
     except Exception as e:
@@ -163,7 +189,6 @@ def generar_respuesta_ollama(ip: str) -> dict:
             "type": "text",
             "content": "Tengo algunos recursos para intercambiar. ¿Qué tienes tú y qué necesitas?"
         }
-
 
 def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
     fn = tool_call.get("function", {})
@@ -177,25 +202,26 @@ def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
             arguments = {}
 
     if name == "finish_trade":
-        give = arguments.get("give", {})
-        receive = arguments.get("receive", {})
+        give = normalizar_trade_dict(arguments.get("give", {}))
+        receive = normalizar_trade_dict(arguments.get("receive", {}))
         message = arguments.get("message", "Trato hecho.")
 
-        if not isinstance(give, dict):
-            give = {}
-        if not isinstance(receive, dict):
-            receive = {}
+        if not isinstance(message, str) or not message.strip():
+            message = "Trato hecho."
+        else:
+            message = message.strip()
+
+        recursos = getRecursos() or {}
+        objetivo = getObjetivo() or {}
+
+        if not validar_trade(give, receive, recursos, objetivo):
+            return {
+                "ok": False,
+                "message": "Ese intercambio no es válido para mí.",
+                "trade": None
+            }
 
         with lock:
-            recursos = getRecursos()
-            objetivo = getObjetivo()
-
-            if not validar_trade(give, receive, recursos, objetivo):
-                return {
-                    "ok": False,
-                    "message": "Ese intercambio no es válido para mí.",
-                    "trade": None
-                }
             post_objects[ip] = {
                 "ip": ip,
                 "give": give,
@@ -244,16 +270,89 @@ def clear_chat(ip: str):
         post_objects.pop(ip, None)
 
 def validar_trade(give: dict, receive: dict, recursos: dict, objetivo: dict):
+    give = normalizar_trade_dict(give)
+    receive = normalizar_trade_dict(receive)
+
     ofrecibles = calcular_ofrecibles(recursos, objetivo)
     faltantes = calcular_faltantes(recursos, objetivo)
 
-    # ❌ 给了不能给的
-    for r, v in give.items():
-        if ofrecibles.get(r, 0) < v:
-            return False
+    # 1) 必须严格 1 换 1
+    if not es_trade_uno_a_uno(give, receive):
+        return False
 
-    # ❌ 没拿到需要的
-    if not any(r in faltantes for r in receive):
+    give_r, give_v = next(iter(give.items()))
+    recv_r, recv_v = next(iter(receive.items()))
+
+    # 2) 先禁用 oro，避免模型拿黄金乱换
+    if give_r == "oro" or recv_r == "oro":
+        return False
+
+    # 3) 不能把自己需要的东西送出去
+    if give_r in faltantes:
+        return False
+
+    # 4) 送出去的必须真的是“可给的”
+    if ofrecibles.get(give_r, 0) < give_v:
+        return False
+
+    # 5) 收到的必须是自己缺的
+    if recv_r not in faltantes:
+        return False
+
+    # 6) 收到数量不能超过当前缺口（这里因为一换一，本质上就是必须为1）
+    if faltantes.get(recv_r, 0) < recv_v:
+        return False
+
+    # 7) 不允许同种资源互换同种资源
+    if give_r == recv_r:
         return False
 
     return True
+
+def normalizar_trade_dict(d: dict) -> dict:
+    limpio = {}
+    if not isinstance(d, dict):
+        return limpio
+
+    for k, v in d.items():
+        try:
+            cantidad = int(v)
+        except Exception:
+            continue
+
+        if cantidad > 0:
+            limpio[str(k).strip()] = cantidad
+
+    return limpio
+
+
+def es_trade_uno_a_uno(give: dict, receive: dict) -> bool:
+    if len(give) != 1 or len(receive) != 1:
+        return False
+
+    give_qty = list(give.values())[0]
+    recv_qty = list(receive.values())[0]
+
+    if give_qty != 1 or recv_qty != 1:
+        return False
+
+    return True
+
+def generar_intercambios_validos(recursos: dict, objetivo: dict) -> list:
+    ofrecibles = calcular_ofrecibles(recursos, objetivo)
+    faltantes = calcular_faltantes(recursos, objetivo)
+
+    intercambios = []
+    for give_r, give_v in ofrecibles.items():
+        if give_v < 1:
+            continue
+        for recv_r, recv_v in faltantes.items():
+            if recv_v < 1:
+                continue
+            if give_r != recv_r:
+                intercambios.append({
+                    "give": {give_r: 1},
+                    "receive": {recv_r: 1}
+                })
+
+    return intercambios
