@@ -1,16 +1,33 @@
 import time
 
 from app.config import MY_ALIAS, PING_TIME, SLEEP_TIME
-from app.state import ip_time, list_ip, list_ping, lock
-from services.server_api import get_gente
+from app.state import (
+    ip_time,
+    list_ip,
+    list_ping,
+    chat_history,
+    chat_status,
+    post_objects,
+    lock,
+)
+from services.server_api import getGente
+from services.ollama_agent import (
+    ensure_chat,
+    generar_respuesta_ollama,
+    ejecutar_tool_call,
+    add_history,
+)
 from services.peer_api import ping
 
-def update_ip():
-    global list_ip, list_ping
 
+def update_ip():
     try:
-        gente = get_gente()
-        new_ips = {ip for alias, ip in gente.items() if alias != MY_ALIAS}
+        gente = getGente()
+
+        new_ips = {
+            ip for alias, ip in gente.items()
+            if alias != MY_ALIAS
+        }
 
         with lock:
             list_ip.clear()
@@ -24,9 +41,13 @@ def update_ip():
             for ip in old_ips:
                 ip_time.pop(ip, None)
                 list_ping.discard(ip)
+                chat_history.pop(ip, None)
+                chat_status.pop(ip, None)
+                post_objects.pop(ip, None)
 
     except Exception as e:
         print("Error updating IP list:", e)
+
 
 def check_inactive_ips():
     now = time.time()
@@ -35,10 +56,42 @@ def check_inactive_ips():
         for ip in list_ip:
             last = ip_time.get(ip)
 
-            if last is None or now - last > PING_TIME:
+            if last is None:
                 list_ping.add(ip)
+            elif now - last > PING_TIME:
+                if chat_status.get(ip, "chatting") == "chatting":
+                    list_ping.add(ip)
 
-def loop(msg: dict):
+
+def iniciar_chat_si_hace_falta(ip: str):
+    ensure_chat(ip)
+
+    with lock:
+        status = chat_status.get(ip, "chatting")
+        history_len = len(chat_history.get(ip, []))
+
+    if status != "chatting":
+        return
+
+    # 只有完全没聊过，才主动发第一句
+    if history_len == 0:
+        respuesta = generar_respuesta_ollama(ip)
+
+        if respuesta["type"] == "text":
+            primer_mensaje = respuesta["content"]
+            add_history(ip, "assistant", primer_mensaje)
+            ping(ip, {"msg": primer_mensaje})
+
+        elif respuesta["type"] == "tool_call":
+            tool_calls = respuesta["tool_calls"]
+            if tool_calls:
+                tool_result = ejecutar_tool_call(ip, tool_calls[0])
+                mensaje_final = tool_result["message"]
+                add_history(ip, "assistant", mensaje_final)
+                ping(ip, {"msg": mensaje_final})
+
+
+def loop():
     while True:
         try:
             update_ip()
@@ -48,8 +101,8 @@ def loop(msg: dict):
                 current_ping_list = list(list_ping)
 
             for ip in current_ping_list:
-                print(f"Ping a {ip}")
-                ping(ip, msg)
+                print(f"Iniciar o reanudar chat con {ip}")
+                iniciar_chat_si_hace_falta(ip)
 
         except Exception as e:
             print("Loop error:", e)
