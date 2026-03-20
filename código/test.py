@@ -1,10 +1,11 @@
 import json
-
+import re
 import requests
 
 from app.config import OLLAMA_URL, OLLAMA_MODEL, MY_ALIAS, MAX_HISTORY
 from app.state import chat_history, chat_status, post_objects, lock
 from services.server_api import getRecursos, getObjetivo, getGenteAlias, postObject
+
 
 
 TOOLS = [
@@ -89,6 +90,39 @@ def add_history(ip: str, role: str, text: str):
         if len(chat_history[ip]) > MAX_HISTORY:
             chat_history[ip] = chat_history[ip][-MAX_HISTORY:]
 
+def extraer_propuesta_del_otro(texto: str) -> dict | None:
+    """
+    Interpreta mensajes simples del otro tipo:
+    - '1 tela por 1 vino'
+    - 'te doy 1 tela por 1 vino'
+    - '1 madera por 1 queso'
+    
+    IMPORTANTE:
+    Siempre se interpreta desde la perspectiva DEL OTRO jugador:
+    '1 tela por 1 vino' = el otro te da tela y quiere vino.
+    """
+
+    if not isinstance(texto, str):
+        return None
+
+    t = texto.lower().strip()
+
+    patron = r'(\d+)\s+([a-záéíóúñ]+)\s+por\s+(\d+)\s+([a-záéíóúñ]+)'
+    m = re.search(patron, t)
+    if not m:
+        return None
+
+    qty_give = int(m.group(1))
+    res_give = m.group(2).strip()
+    qty_want = int(m.group(3))
+    res_want = m.group(4).strip()
+
+    return {
+        "peer_gives": {res_give: qty_give},
+        "peer_wants": {res_want: qty_want},
+        "yo_recibo": {res_give: qty_give},
+        "yo_doy": {res_want: qty_want},
+    }
 
 def generar_respuesta_ollama(ip: str) -> dict:
     recursos = getRecursos() or {}
@@ -104,50 +138,72 @@ def generar_respuesta_ollama(ip: str) -> dict:
     with lock:
         history = list(chat_history[ip])
 
+    ultimo_msg_otro = obtener_ultimo_mensaje_del_otro(history)
+    propuesta_otro = extraer_propuesta_del_otro(ultimo_msg_otro)
+
     system_prompt = f"""
-        Eres {MY_ALIAS}, un jugador en un juego de intercambio.
+Eres {MY_ALIAS}, un jugador en un juego de intercambio.
 
-        TU OBJETIVO: completar tus recursos faltantes.
+TUS RECURSOS ACTUALES:
+{recursos}
 
-        RECURSOS QUE NECESITAS:
-        {faltantes}
+TU OBJETIVO FINAL:
+{objetivo}
 
-        RECURSOS QUE PUEDES OFRECER:
-        {ofrecibles}
+TUS FALTANTES:
+{faltantes}
 
-        ORO DISPONIBLE:
-        {oro_disp}
+TUS RECURSOS OFRECIBLES:
+{ofrecibles}
 
-        INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER:
-        {intercambios_validos}
-        Analizar el mensaje que nos envía del otro jugador para saber si hay que aceptar el cambio o no
-        REGLAS OBLIGATORIAS:
-        - SOLO puedes proponer intercambios 1 por 1
-        - SOLO un recurso en give y SOLO un recurso en receive
-        - La cantidad SIEMPRE debe ser 1
-        - Nunca ofrezcas recursos que NO estén en "RECURSOS QUE PUEDES OFRECER"
-        - Nunca ofrezcas recursos que todavía necesitas
-        - Nunca inventes recursos
-        - Nunca hagas intercambios de muchos por muchos
-        - Solo puedes proponer o aceptar intercambios que estén en "INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER"
-        - Solo usa finish_trade cuando el otro jugador ya haya aceptado claramente
-        - Si no puedes hacer un intercambio válido, responde con texto y haz una contraoferta simple
-        - Si no tienes ningún intercambio válido posible, responde solo con texto
-        - No uses oro en finish_trade
-        REGLA CRÍTICA (NO FALLAR):
-        Cuando alguien dice "X por Y":
-        - El otro jugador TE DA X
-        - El otro jugador QUIERE Y
-        Ejemplo válido:
-        give={{"madera": 1}}
-        receive={{"piedra": 1}}
+ORO DISPONIBLE:
+{oro_disp}
 
-        Ejemplo inválido:
-        give={{"madera": 2, "trigo": 1}}
-        receive={{"piedra": 3}}
+INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER:
+{intercambios_validos}
 
-        Responde corto y natural.
-    """
+ÚLTIMO MENSAJE DEL OTRO JUGADOR:
+{ultimo_msg_otro}
+
+INTERPRETACIÓN DEL ÚLTIMO MENSAJE DEL OTRO JUGADOR:
+{propuesta_otro}
+
+REGLA MUY IMPORTANTE:
+- El último mensaje siempre viene desde la perspectiva DEL OTRO jugador.
+- Si el otro dice "1 tela por 1 vino", significa:
+  - el otro te da 1 tela
+  - el otro quiere 1 vino de ti
+- Desde TU perspectiva, eso significa:
+  - tú recibes 1 tela
+  - tú entregas 1 vino
+
+REGLAS OBLIGATORIAS:
+- SOLO puedes razonar y responder desde TU perspectiva
+- SOLO puedes proponer intercambios 1 por 1
+- SOLO un recurso en give y SOLO un recurso en receive
+- La cantidad SIEMPRE debe ser 1
+- Nunca ofrezcas recursos que NO estén en "TUS RECURSOS OFRECIBLES"
+- Nunca ofrezcas recursos que todavía necesitas
+- Nunca inventes recursos
+- Nunca hagas intercambios de muchos por muchos
+- Solo puedes proponer o aceptar intercambios que estén en "INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER"
+- Si el otro te ofrece algo que tú no necesitas, rechaza o haz contraoferta
+- Si el otro te pide algo que tú no puedes dar, rechaza o haz contraoferta
+- Solo usa finish_trade cuando el otro jugador ya haya aceptado claramente
+- Si no puedes hacer un intercambio válido, responde con texto corto
+- Si no tienes ningún intercambio válido posible, responde solo con texto
+- No uses oro en finish_trade
+
+Ejemplo válido desde TU perspectiva:
+give={{"madera": 1}}
+receive={{"piedra": 1}}
+
+Ejemplo inválido:
+give={{"madera": 2, "trigo": 1}}
+receive={{"piedra": 3}}
+
+Responde corto y natural.
+"""
 
     messages = [{"role": "system", "content": system_prompt}] + history
 
@@ -192,6 +248,14 @@ def generar_respuesta_ollama(ip: str) -> dict:
             "type": "text",
             "content": "Tengo algunos recursos para intercambiar. ¿Qué tienes tú y qué necesitas?"
         }
+
+def obtener_ultimo_mensaje_del_otro(history: list) -> str:
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return ""
 
 def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
     fn = tool_call.get("function", {})
