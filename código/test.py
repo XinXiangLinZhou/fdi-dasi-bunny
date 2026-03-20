@@ -109,15 +109,14 @@ def generar_respuesta_ollama(ip: str) -> str:
         history = list(chat_history[ip])
 
     system_prompt = f"""
-Eres bunny, un jugador en un juego de intercambio de recursos.
-Tus recursos actuales son: {recursos}
+Eres un jugador experto de Catan.
 Tu objetivo es: {objetivo}
 
 Reglas:
-- Responde en español.
-- Mensajes cortos tipo chat.
-- Negocia recursos.
-- Propón intercambios claros.
+- Si te conviene → acepta.
+- Si no → rechaza o haz contraoferta.
+- Solo intercambiar estos recursos {recursos} de uno en uno
+- Genera un mensaje corto (que no incluya el objetivo, solo los recursos)
 - Cuando el intercambio esté completamente acordado, usa la herramienta finish_trade.
 """
 
