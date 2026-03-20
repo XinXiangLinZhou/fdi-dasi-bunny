@@ -1,0 +1,461 @@
+import threading
+import time
+import json
+import requests
+
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+
+app = FastAPI()
+
+SERVER_URL = "http://172.16.82.142:7719/"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "ministral-3:8b"
+
+ip_time = {}
+
+sleep_time = 30
+ping_time = 60
+
+# IP jugadores
+list_ip = set()
+
+# IP que hay que hacer ping
+list_ping = set()
+
+# historial mensaje de cada ip
+# chat_history[ip] = [{"role": "user"/"assistant", "content": "..."}]
+chat_history = {}
+
+# estado de comunicacion
+# chatting / success / stopped
+chat_status = {}
+
+# guardar objetos acordados por ip
+# post_objects[ip] = {
+#     "ip": ip,
+#     "give": {"madera": 1},
+#     "receive": {"piedra": 1}
+# }
+post_objects = {}
+
+MAX_HISTORY = 12
+
+lock = threading.Lock()
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "finish_trade",
+            "description": "Usa esta herramienta solo cuando el intercambio ya esté claramente aceptado por ambas partes. Registra lo que bunny entrega y lo que bunny recibe.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "give": {
+                        "type": "object",
+                        "description": "Recursos que bunny entrega al otro jugador. Ejemplo: {'madera': 1}"
+                    },
+                    "receive": {
+                        "type": "object",
+                        "description": "Recursos que bunny recibe del otro jugador. Ejemplo: {'piedra': 1}"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Mensaje corto final de confirmación para enviar al otro jugador."
+                    }
+                },
+                "required": ["give", "receive", "message"]
+            }
+        }
+    }
+]
+
+
+def postName():
+    try:
+        gente = getGente()
+        if gente.get("test") is None:
+            requests.post(SERVER_URL + "alias/test", timeout=3)
+    except Exception as e:
+        print("postName error:", e)
+
+
+def getInfo():
+    info = requests.get(SERVER_URL + "info", timeout=3)
+    return info.json()
+
+
+def getRecursos():
+    informacion = getInfo()
+    return informacion["Recursos"]
+
+
+def getObjetivo():
+    informacion = getInfo()
+    return informacion["Objetivo"]
+
+
+def getGente():
+    gente = requests.get(SERVER_URL + "gente", timeout=3)
+    personas = gente.json()
+
+    jugadores = {}
+    for p in personas:
+        jugadores[p["alias"]] = p["ip"]
+
+    return jugadores
+
+
+def getGenteAlias():
+    gente = requests.get(SERVER_URL + "gente", timeout=3)
+    personas = gente.json()
+
+    jugadores = {}
+    for p in personas:
+        jugadores[p["ip"]] = p["alias"]
+
+    return jugadores
+
+
+def postObject(ip, obj):
+    alias = getGenteAlias().get(ip)
+    if alias is None:
+        print(f"postObject error: no alias encontrado para IP {ip}")
+        return
+
+    requests.post(
+        SERVER_URL + "paquetes/" + alias,
+        json=obj,
+        timeout=3
+    )
+
+
+class Mensaje(BaseModel):
+    msg: str
+
+
+def ensure_chat(ip: str):
+    with lock:
+        if ip not in chat_history:
+            chat_history[ip] = []
+        if ip not in chat_status:
+            chat_status[ip] = "chatting"
+
+
+def add_history(ip: str, role: str, text: str):
+    ensure_chat(ip)
+    with lock:
+        chat_history[ip].append({
+            "role": role,
+            "content": text
+        })
+        if len(chat_history[ip]) > MAX_HISTORY:
+            chat_history[ip] = chat_history[ip][-MAX_HISTORY:]
+
+
+def generar_respuesta_ollama(ip: str) -> dict:
+    recursos = getRecursos()
+    objetivo = getObjetivo()
+
+    ensure_chat(ip)
+
+    with lock:
+        history = list(chat_history[ip])
+
+    system_prompt = f"""
+Eres bunny, un jugador en un juego de intercambio de recursos.
+
+Tus recursos actuales son: {recursos}
+Tu objetivo es: {objetivo}
+
+Reglas:
+- Responde siempre en español.
+- Habla de forma breve, natural y como un jugador real.
+- Intenta conseguir recursos útiles para tu objetivo.
+- Solo intercambiar con los recursos tenemos por recursos que necesitamos
+- Puedes ofrecer intercambios concretos.
+- Si todavía no hay un acuerdo cerrado, responde con texto normal.
+- Solo usa la herramienta finish_trade cuando el otro jugador ya haya aceptado claramente el intercambio y no haya dudas.
+- En finish_trade:
+  - "give" = lo que bunny entrega
+  - "receive" = lo que bunny recibe
+  - "message" = mensaje corto final de confirmación
+- No expliques reglas internas.
+- No inventes recursos imposibles.
+"""
+
+    messages = [{"role": "system", "content": system_prompt}] + history
+
+    data = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "tools": TOOLS,
+        "stream": False,
+        "keep_alive": "10m"
+    }
+
+    try:
+        r = requests.post(OLLAMA_URL, json=data, timeout=60)
+        print("Status Ollama:", r.status_code)
+        print("Respuesta cruda Ollama:", r.text)
+
+        r.raise_for_status()
+        result = r.json()
+
+        msg = result.get("message", {})
+
+        # Si el modelo decide llamar una herramienta
+        if msg.get("tool_calls"):
+            return {
+                "type": "tool_call",
+                "tool_calls": msg["tool_calls"]
+            }
+
+        # Respuesta normal
+        return {
+            "type": "text",
+            "content": msg.get("content", "").strip() or "¿Qué recursos tienes para intercambiar?"
+        }
+
+    except Exception as e:
+        print("Ollama error:", e)
+        return {
+            "type": "text",
+            "content": "Tengo algunos recursos para intercambiar. ¿Qué tienes tú y qué necesitas?"
+        }
+
+
+def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
+    fn = tool_call.get("function", {})
+    name = fn.get("name")
+
+    arguments = fn.get("arguments", {})
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except Exception:
+            arguments = {}
+
+    if name == "finish_trade":
+        give = arguments.get("give", {})
+        receive = arguments.get("receive", {})
+        message = arguments.get("message", "Trato hecho.")
+
+        if not isinstance(give, dict):
+            give = {}
+        if not isinstance(receive, dict):
+            receive = {}
+
+        with lock:
+            post_objects[ip] = {
+                "ip": ip,
+                "give": give,
+                "receive": receive
+            }
+            chat_status[ip] = "success"
+
+        # Bunny entrega sus recursos al otro jugador
+        try:
+            if give:
+                postObject(ip, give)
+        except Exception as e:
+            print("postObject error:", e)
+
+        return {
+            "ok": True,
+            "message": message,
+            "trade": {
+                "give": give,
+                "receive": receive
+            }
+        }
+
+    return {
+        "ok": False,
+        "message": "No entiendo la herramienta solicitada.",
+        "trade": None
+    }
+
+
+@app.post("/buzon")
+async def buzon(request: Request, mensaje: Mensaje):
+    client_ip = request.client.host
+    texto_recibido = mensaje.msg
+    now = time.time()
+
+    print("IP:", client_ip)
+    print("mensaje:", texto_recibido)
+
+    with lock:
+        ip_time[client_ip] = now
+        list_ping.discard(client_ip)
+
+    ensure_chat(client_ip)
+    add_history(client_ip, "user", texto_recibido)
+
+    with lock:
+        status = chat_status.get(client_ip, "chatting")
+
+    if status != "chatting":
+        return {"status": status}
+
+    respuesta = generar_respuesta_ollama(client_ip)
+
+    # Respuesta normal de texto
+    if respuesta["type"] == "text":
+        respuesta_texto = respuesta["content"]
+        add_history(client_ip, "assistant", respuesta_texto)
+
+        result = ping(client_ip, {"msg": respuesta_texto})
+
+        return {
+            "status": "sent",
+            "response": result
+        }
+
+    # Tool call
+    if respuesta["type"] == "tool_call":
+        tool_calls = respuesta["tool_calls"]
+
+        if not tool_calls:
+            return {"status": "error", "msg": "tool_calls vacío"}
+
+        tool_result = ejecutar_tool_call(client_ip, tool_calls[0])
+
+        respuesta_texto = tool_result["message"]
+        add_history(client_ip, "assistant", respuesta_texto)
+
+        result = ping(client_ip, {"msg": respuesta_texto})
+
+        return {
+            "status": "success" if tool_result["ok"] else "error",
+            "response": result,
+            "trade": tool_result.get("trade")
+        }
+
+    return {"status": "error", "msg": "respuesta no válida de Ollama"}
+
+
+def update_ip():
+    global list_ip, list_ping
+
+    try:
+        gente = getGente()
+
+        new_ips = {
+            ip for alias, ip in gente.items()
+            if alias != "test"
+        }
+
+        with lock:
+            list_ip = new_ips
+
+            for ip in new_ips:
+                if ip not in ip_time:
+                    list_ping.add(ip)
+
+            old_ips = set(ip_time.keys()) - new_ips
+            for ip in old_ips:
+                ip_time.pop(ip, None)
+                list_ping.discard(ip)
+                chat_history.pop(ip, None)
+                chat_status.pop(ip, None)
+                post_objects.pop(ip, None)
+
+    except Exception as e:
+        print("Error updating IP list:", e)
+
+
+def ping(ip, msg):
+    url = f"http://{ip}:7720/buzon"
+
+    try:
+        r = requests.post(url, json=msg, timeout=10)
+
+        if r.status_code == 200:
+            with lock:
+                ip_time[ip] = time.time()
+                list_ping.discard(ip)
+            return r.json()
+
+    except requests.exceptions.RequestException:
+        pass
+
+    return None
+
+
+def check_inactive_ips():
+    now = time.time()
+
+    with lock:
+        for ip in list_ip:
+            last = ip_time.get(ip)
+
+            if last is None:
+                list_ping.add(ip)
+            elif now - last > ping_time:
+                if chat_status.get(ip, "chatting") == "chatting":
+                    list_ping.add(ip)
+
+
+def iniciar_chat_si_hace_falta(ip: str):
+    ensure_chat(ip)
+
+    with lock:
+        status = chat_status.get(ip, "chatting")
+        history_len = len(chat_history.get(ip, []))
+
+    if status != "chatting":
+        return
+
+    # Solo manda mensaje inicial si aún no hay historial
+    if history_len == 0:
+        respuesta = generar_respuesta_ollama(ip)
+
+        if respuesta["type"] == "text":
+            primer_mensaje = respuesta["content"]
+            add_history(ip, "assistant", primer_mensaje)
+            ping(ip, {"msg": primer_mensaje})
+
+        elif respuesta["type"] == "tool_call":
+            tool_calls = respuesta["tool_calls"]
+            if tool_calls:
+                tool_result = ejecutar_tool_call(ip, tool_calls[0])
+                mensaje_final = tool_result["message"]
+                add_history(ip, "assistant", mensaje_final)
+                ping(ip, {"msg": mensaje_final})
+
+
+def loop():
+    while True:
+        try:
+            update_ip()
+            check_inactive_ips()
+
+            with lock:
+                current_ping_list = list(list_ping)
+
+            for ip in current_ping_list:
+                print(f"Iniciar o reanudar chat con {ip}")
+                iniciar_chat_si_hace_falta(ip)
+
+        except Exception as e:
+            print("Loop error:", e)
+
+        time.sleep(sleep_time)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    postName()
+
+    # ejemplo correcto: dict, no string
+    # postObject("127.0.0.1", {"piedra": 1})
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+
+    uvicorn.run(app, host=getGente().get("test"), port=7720)
