@@ -1,48 +1,143 @@
-def generar_respuesta_ollama(ip: str) -> dict:
-    recursos = getRecursos()
-    objetivo = getObjetivo()
+import threading
+import time
+import json
+import requests
 
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+
+app = FastAPI()
+
+SERVER_URL = "http://172.16.82.142:7719/"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "ministral-3:8b"
+
+ip_time = {}
+sleep_time = 30
+ping_time = 60
+
+list_ip = set()
+list_ping = set()
+chat_history = {}
+chat_status = {}
+post_objects = {}
+
+MAX_HISTORY = 12
+lock = threading.Lock()
+
+# Inventario y objetivo localizados
+mis_recursos = {
+    "madera": 2,
+    "arroz": 4,
+    "vino": 0,
+    "oro": 17
+}
+
+objetivo = {
+    "madera": 4,
+    "tela": 3,
+    "ladrillos": 3
+}
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "finish_trade",
+            "description": "Usa solo cuando el intercambio esté aceptado por ambas partes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "give": {"type": "object"},
+                    "receive": {"type": "object"},
+                    "message": {"type": "string"}
+                },
+                "required": ["give", "receive", "message"]
+            }
+        }
+    }
+]
+
+class Mensaje(BaseModel):
+    msg: str
+
+
+# ================= Funciones de chat =================
+
+def ensure_chat(ip: str):
+    with lock:
+        if ip not in chat_history:
+            chat_history[ip] = []
+        if ip not in chat_status:
+            chat_status[ip] = "chatting"
+
+def add_history(ip: str, role: str, text: str):
     ensure_chat(ip)
+    with lock:
+        chat_history[ip].append({"role": role, "content": text})
+        if len(chat_history[ip]) > MAX_HISTORY:
+            chat_history[ip] = chat_history[ip][-MAX_HISTORY:]
 
+# ================= Servidor y gente =================
+
+def getGente():
+    try:
+        r = requests.get(SERVER_URL + "gente", timeout=3)
+        r.raise_for_status()
+        personas = r.json()
+        return {p["alias"]: p["ip"] for p in personas}
+    except:
+        return {}
+
+def getGenteAlias():
+    try:
+        r = requests.get(SERVER_URL + "gente", timeout=3)
+        r.raise_for_status()
+        personas = r.json()
+        return {p["ip"]: p["alias"] for p in personas}
+    except:
+        return {}
+
+def postObject(ip, obj):
+    alias = getGenteAlias().get(ip)
+    if alias:
+        requests.post(SERVER_URL + "paquetes/" + alias, json=obj, timeout=3)
+        # Actualizar inventario local
+        for r, cantidad in obj.items():
+            if r in mis_recursos:
+                mis_recursos[r] -= cantidad
+    else:
+        print(f"No se encontró alias para IP {ip}")
+
+# ================= Respuesta Ollama =================
+
+def generar_respuesta_ollama(ip: str) -> dict:
+    ensure_chat(ip)
     with lock:
         history = list(chat_history[ip])
 
     system_prompt = f"""
 Eres un jugador experto de Catan.
 Tu objetivo es: {objetivo}
-Tus recursos actuales son: {recursos}
+Tus recursos actuales son: {mis_recursos}
 
 Reglas:
-- Responde en español, mensajes cortos.
-- Solo negocia con los recursos que tienes.
+- Mensajes cortos en español.
+- Solo negocia con recursos que tienes.
+- Nunca des más de lo que tienes.
 - Si te conviene → acepta.
-- Si no → rechaza o contraoferta.
-
-REGLA CRÍTICA (NO FALLAR):
-Cuando alguien dice "X por Y":
-- El otro jugador TE DA X
-- El otro jugador QUIERE Y
-
-Por tanto:
-- give = lo que TÚ entregas (Y)
-- receive = lo que TÚ recibes (X)
-
-Ejemplo:
-"3 arroz por 1 tela"
-→ give = {{ "tela": 1 }}
-→ receive = {{ "arroz": 3 }}
-
-- Nunca inviertas esto.
-- Nunca inventes recursos.
-
-Cuando el intercambio esté cerrado, usa finish_trade.
+- Si no → rechaza o haz contraoferta.
+- Cuando alguien dice "X por Y":
+  - El otro jugador TE DA X
+  - El otro jugador QUIERE Y
+- give = lo que TÚ entregas (lo que piden)
+- receive = lo que TÚ recibes (lo que ofrecen)
+- Cuando el intercambio esté cerrado, usa finish_trade.
 """
-
-    messages = [{"role": "system", "content": system_prompt}] + history
 
     data = {
         "model": OLLAMA_MODEL,
-        "messages": messages,
+        "messages": [{"role": "system", "content": system_prompt}] + history,
         "tools": TOOLS,
         "stream": False,
         "keep_alive": "10m"
@@ -50,94 +145,165 @@ Cuando el intercambio esté cerrado, usa finish_trade.
 
     try:
         r = requests.post(OLLAMA_URL, json=data, timeout=60)
-        print("Status Ollama:", r.status_code)
-        print("Respuesta cruda Ollama:", r.text)
-
         r.raise_for_status()
         result = r.json()
-
         msg = result.get("message", {})
 
-        # Si el modelo decide llamar una herramienta
         if msg.get("tool_calls"):
-            return {
-                "type": "tool_call",
-                "tool_calls": msg["tool_calls"]
-            }
+            return {"type": "tool_call", "tool_calls": msg["tool_calls"]}
 
-        # Respuesta normal
-        return {
-            "type": "text",
-            "content": msg.get("content", "").strip() or "¿Qué recursos tienes para intercambiar?"
-        }
-
+        return {"type": "text", "content": msg.get("content", "").strip() or "¿Qué recursos tienes para intercambiar?"}
     except Exception as e:
         print("Ollama error:", e)
-        return {
-            "type": "text",
-            "content": "Tengo algunos recursos para intercambiar. ¿Qué tienes tú y qué necesitas?"
-        }
+        return {"type": "text", "content": "Tengo algunos recursos para intercambiar. ¿Qué tienes tú?"}
 
+# ================= Ejecutar trade =================
 
 def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
     fn = tool_call.get("function", {})
     name = fn.get("name")
+    args = fn.get("arguments", {})
 
-    arguments = fn.get("arguments", {})
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except Exception:
-            arguments = {}
+    if name != "finish_trade":
+        return {"ok": False, "message": "Herramienta desconocida.", "trade": None}
 
-    if name == "finish_trade":
-        give = arguments.get("give", {})
-        receive = arguments.get("receive", {})
-        message = arguments.get("message", "Trato hecho.")
+    give = args.get("give", {})
+    receive = args.get("receive", {})
+    message = args.get("message", "Trato hecho.")
 
-        if not isinstance(give, dict):
-            give = {}
-        if not isinstance(receive, dict):
-            receive = {}
+    # Corregir inversión
+    for r in give:
+        if mis_recursos.get(r, 0) < give[r]:
+            print("Inversión detectada, corrigiendo...")
+            give, receive = receive, give
+            break
 
-        recursos = getRecursos()
+    # Validar que realmente tenemos los recursos
+    for r, cantidad in give.items():
+        if mis_recursos.get(r, 0) < cantidad:
+            return {"ok": False, "message": f"No tengo suficiente {r}.", "trade": None}
 
-        # DETECTAR INVERSIÓN
-        for r in give:
-            if r not in recursos:
-                print("Inversión detectada → corrigiendo")
-                give, receive = receive, give
-                break
-
-        # VALIDAR RECURSOS REALES
+    # Ejecutar trade y actualizar inventario
+    with lock:
         for r, cantidad in give.items():
-            if r not in recursos:
-                print(f"Recurso inválido: {r}")
-                return {
-                    "ok": False,
-                    "message": "No tengo ese recurso.",
-                    "trade": None
-                }
-        # guardar trade
-        with lock:
-            post_objects[ip] = {
-                "ip": ip,
-                "give": give,
-                "receive": receive
-            }
-            chat_status[ip] = "success"
+            mis_recursos[r] -= cantidad
+        for r, cantidad in receive.items():
+            mis_recursos[r] = mis_recursos.get(r, 0) + cantidad
+        post_objects[ip] = {"ip": ip, "give": give, "receive": receive}
+        chat_status[ip] = "success"
 
-        # ejecutar envío
-        if give:
-            postObject(ip, give)
+    if give:
+        postObject(ip, give)
 
-        print("Trade ejecutado:", {"give": give, "receive": receive})
+    print("Trade ejecutado:", {"give": give, "receive": receive})
+    return {"ok": True, "message": message, "trade": {"give": give, "receive": receive}}
 
-        return {
-            "ok": True,
-            "message": message,
-            "trade": {
-                "give": give,
-                "receive": receive
-            }
-        }
+# ================= FastAPI =================
+
+@app.post("/buzon")
+async def buzon(request: Request, mensaje: Mensaje):
+    client_ip = request.client.host
+    texto = mensaje.msg
+    now = time.time()
+
+    with lock:
+        ip_time[client_ip] = now
+        list_ping.discard(client_ip)
+
+    ensure_chat(client_ip)
+    add_history(client_ip, "user", texto)
+
+    with lock:
+        status = chat_status.get(client_ip, "chatting")
+
+    if status != "chatting":
+        return {"status": status}
+
+    respuesta = generar_respuesta_ollama(client_ip)
+
+    if respuesta["type"] == "text":
+        add_history(client_ip, "assistant", respuesta["content"])
+        ping(client_ip, {"msg": respuesta["content"]})
+        return {"status": "sent", "response": respuesta["content"]}
+
+    if respuesta["type"] == "tool_call":
+        tool_result = ejecutar_tool_call(client_ip, respuesta["tool_calls"][0])
+        add_history(client_ip, "assistant", tool_result["message"])
+        ping(client_ip, {"msg": tool_result["message"]})
+        return {"status": "success" if tool_result["ok"] else "error", "trade": tool_result.get("trade")}
+
+    return {"status": "error", "msg": "respuesta no válida de Ollama"}
+
+# ================= Loop de comunicación =================
+
+def update_ip():
+    global list_ip, list_ping
+    gente = getGente()
+    new_ips = {ip for alias, ip in gente.items() if alias != "test"}
+    with lock:
+        list_ip = new_ips
+        for ip in new_ips:
+            if ip not in ip_time:
+                list_ping.add(ip)
+        for ip in set(ip_time) - new_ips:
+            ip_time.pop(ip, None)
+            list_ping.discard(ip)
+            chat_history.pop(ip, None)
+            chat_status.pop(ip, None)
+            post_objects.pop(ip, None)
+
+def ping(ip, msg):
+    try:
+        r = requests.post(f"http://{ip}:7720/buzon", json=msg, timeout=10)
+        if r.status_code == 200:
+            with lock:
+                ip_time[ip] = time.time()
+                list_ping.discard(ip)
+            return r.json()
+    except:
+        pass
+    return None
+
+def check_inactive_ips():
+    now = time.time()
+    with lock:
+        for ip in list_ip:
+            last = ip_time.get(ip)
+            if last is None or now - last > ping_time:
+                if chat_status.get(ip, "chatting") == "chatting":
+                    list_ping.add(ip)
+
+def iniciar_chat_si_hace_falta(ip: str):
+    ensure_chat(ip)
+    with lock:
+        if chat_status.get(ip, "chatting") != "chatting" or chat_history.get(ip):
+            return
+    respuesta = generar_respuesta_ollama(ip)
+    if respuesta["type"] == "text":
+        add_history(ip, "assistant", respuesta["content"])
+        ping(ip, {"msg": respuesta["content"]})
+    elif respuesta["type"] == "tool_call" and respuesta["tool_calls"]:
+        tool_result = ejecutar_tool_call(ip, respuesta["tool_calls"][0])
+        add_history(ip, "assistant", tool_result["message"])
+        ping(ip, {"msg": tool_result["message"]})
+
+def loop():
+    while True:
+        try:
+            update_ip()
+            check_inactive_ips()
+            with lock:
+                targets = list(list_ping)
+            for ip in targets:
+                iniciar_chat_si_hace_falta(ip)
+        except Exception as e:
+            print("Loop error:", e)
+        time.sleep(sleep_time)
+
+# ================= Main =================
+
+if __name__ == "__main__":
+    import uvicorn
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    uvicorn.run(app, host=getGente().get("test"), port=7720)
