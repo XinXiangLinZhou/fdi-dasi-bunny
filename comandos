@@ -26,5 +26,7 @@
     wget https://ollama.com/download/ollama-linux-amd64.tar.zst
   2. Ejecutar el servidor de Ollama
     bin/ollama serve
-  3. Ejecutar un modelo
-    bin/ollama run qwen3
+  3. Descargar modelo
+    bin/ollama pull ministarl-3:8B
+  4. Ejecutar un modelo
+    bin/ollama run ministarl-3:8B
