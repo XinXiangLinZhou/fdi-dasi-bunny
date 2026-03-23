@@ -196,6 +196,9 @@ REGLAS OBLIGATORIAS:
 - Nunca ofrezcas recursos que todavía necesitas
 - Nunca inventes recursos
 - Nunca hagas intercambios de muchos por muchos
+- REGLA CRÍTICA (NO FALLAR),Cuando alguien dice "X por Y":
+	- El otro jugador TE DA X
+	- El otro jugador QUIERE Y
 - Solo puedes proponer o aceptar intercambios que estén en "INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER"
 - Si el otro te ofrece algo que tú no necesitas, rechaza o haz contraoferta
 - Si el otro te pide algo que tú no puedes dar, rechaza o haz contraoferta
@@ -203,6 +206,7 @@ REGLAS OBLIGATORIAS:
 - Si no puedes hacer un intercambio válido, responde con texto corto
 - Si no tienes ningún intercambio válido posible, responde solo con texto
 - No uses oro en finish_trade
+- Si el otro ya te entregó el recurso acordado, tú igualmente debes completar tu parte del intercambio acordado si sigue siendo un give válido para ti.
 
 Ejemplo válido desde TU perspectiva:
 give={{"madera": 1}}
@@ -295,10 +299,21 @@ def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
         recursos = getRecursos() or {}
         objetivo = getObjetivo() or {}
 
-        if not validar_trade(give, receive, recursos, objetivo):
+        if not validar_trade(give, receive, recursos, objetivo, strict_need_check=False):
             return {
                 "ok": False,
                 "message": "Ese intercambio no es válido para mí.",
+                "trade": None
+            }
+
+        try:
+            if give:
+                postObject(ip, give)
+        except Exception as e:
+            print("postObject error:", e)
+            return {
+                "ok": False,
+                "message": "No pude completar el envío de mi recurso.",
                 "trade": None
             }
 
@@ -309,12 +324,6 @@ def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
                 "receive": receive
             }
             chat_status[ip] = "success"
-
-        try:
-            if give:
-                postObject(ip, give)
-        except Exception as e:
-            print("postObject error:", e)
 
         return {
             "ok": True,
@@ -355,41 +364,36 @@ def clear_chat(ip: str):
 
 
 # Función: comprueba si un intercambio cumple las reglas del juego
-def validar_trade(give: dict, receive: dict, recursos: dict, objetivo: dict):
+def validar_trade(give: dict, receive: dict, recursos: dict, objetivo: dict, strict_need_check=True):
     give = normalizar_trade_dict(give)
     receive = normalizar_trade_dict(receive)
 
     ofrecibles = calcular_ofrecibles(recursos, objetivo)
     faltantes = calcular_faltantes(recursos, objetivo)
 
-    # 1) 必须严格 1 换 1
     if not es_trade_uno_a_uno(give, receive):
         return False
 
     give_r, give_v = next(iter(give.items()))
     recv_r, recv_v = next(iter(receive.items()))
 
-    # 2) 先禁用 oro，避免模型拿黄金乱换
     if give_r == "oro" or recv_r == "oro":
         return False
 
-    # 3) 不能把自己需要的东西送出去
     if give_r in faltantes:
         return False
 
-    # 4) 送出去的必须真的是“可给的”
     if ofrecibles.get(give_r, 0) < give_v:
         return False
 
-    # 5) 收到的必须是自己缺的
-    if recv_r not in faltantes:
-        return False
+    # 只有严格模式才检查“我现在还缺不缺收到的东西”
+    if strict_need_check:
+        if recv_r not in faltantes:
+            return False
 
-    # 6) 收到数量不能超过当前缺口（这里因为一换一，本质上就是必须为1）
-    if faltantes.get(recv_r, 0) < recv_v:
-        return False
+        if faltantes.get(recv_r, 0) < recv_v:
+            return False
 
-    # 7) 不允许同种资源互换同种资源
     if give_r == recv_r:
         return False
 
@@ -434,7 +438,7 @@ def generar_intercambios_validos(recursos: dict, objetivo: dict) -> list:
     faltantes = calcular_faltantes(recursos, objetivo)
 
     intercambios = []
-    for give_r, give_v in ofrecibles.items():
+    for give_r, give_v in ofrecibles.items():  
         if give_v < 1:
             continue
         for recv_r, recv_v in faltantes.items():
