@@ -27,6 +27,6 @@
   2. Ejecutar el servidor de Ollama
     bin/ollama serve
   3. Descargar modelo
-    bin/ollama pull ministarl-3:8B
+    bin/ollama pull ministral-3:8B
   4. Ejecutar un modelo
-    bin/ollama run ministarl-3:8B
+    bin/ollama run ministral-3:8B
