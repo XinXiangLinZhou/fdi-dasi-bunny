@@ -196,6 +196,9 @@ REGLAS OBLIGATORIAS:
 - Nunca ofrezcas recursos que todavía necesitas
 - Nunca inventes recursos
 - Nunca hagas intercambios de muchos por muchos
+- REGLA CRÍTICA (NO FALLAR),Cuando alguien dice "X por Y":
+	- El otro jugador TE DA X
+	- El otro jugador QUIERE Y
 - Solo puedes proponer o aceptar intercambios que estén en "INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER"
 - Si el otro te ofrece algo que tú no necesitas, rechaza o haz contraoferta
 - Si el otro te pide algo que tú no puedes dar, rechaza o haz contraoferta
