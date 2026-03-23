@@ -1,30 +1,34 @@
 Para la ejecución del sistema es necesario:
 
--Disponer de Python instalado.
+- Disponer de Python instalado.
 
--Tener configurado uv para la gestión de dependencias.
+- Tener configurado uv para la gestión de dependencias.
 
--Contar con el servidor del juego en funcionamiento.
+- Contar con el servidor del juego en funcionamiento.
 
--Tener Ollama instalado y ejecutando el modelo seleccionado.
+- Tener Ollama instalado y ejecutando el modelo seleccionado.
 
--Disponer de conectividad entre los jugadores.
+- Disponer de conectividad entre los jugadores.
 
 Pasos básicos de ejecución:
 
--Iniciar el servidor del juego.
+- Iniciar el servidor del juego.
 
--Ejecutar Ollama con el modelo correspondiente.
+- Cambiar ip del servidor en código/app/config.py en esta linea del código
 
-    bin/ollama run ministral-3:8B
+        SERVER_URL = os.getenv("SERVER_URL", "http://147.96.81.252:7719/")
+
+- Ejecutar Ollama con el modelo correspondiente.
+
+        bin/ollama run ministral-3:8B
     
--Lanzar la aplicación FastAPI.
+- Lanzar la aplicación FastAPI entrando carpeta código.
 
-    uv run run.py
+        uv run run.py
     
--Verificar el registro del agente.
+- Verificar el registro del agente.
 
--Iniciar la interacción entre jugadores.
+- Iniciar la interacción entre jugadores.
 
 
 Miembros: ALONSO CAMPILLO MARTÍNEZ, ERICKA DEL VALLE BRACHO PÉREZ, JIAHUI YOU, LUIS ÁNGEL GARCÍA ROJAS, SHOMARA DEYANIRA ACOSTA SANTANA, XIN XIANG LIN ZHOU.
