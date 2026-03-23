@@ -25,3 +25,16 @@ Pasos básicos de ejecución:
 -Verificar el registro del agente.
 
 -Iniciar la interacción entre jugadores.
+
+
+Miembros: ALONSO CAMPILLO MARTÍNEZ, ERICKA DEL VALLE BRACHO PÉREZ, JIAHUI YOU, LUIS ÁNGEL GARCÍA ROJAS, SHOMARA DEYANIRA ACOSTA SANTANA, XIN XIANG LIN ZHOU.
+
+Hemos trabajado en diferentes ramas:
+
+Rama test: es la rama inicial que estamos trabajando-> mian.py es el código inicial de la comunicación sin meter ollama, distintos ficheros test/pruebas son para probar metiendo ollama y flujo de arquitecturas.
+
+Rama Dev: es la rama que tenemos la estructura inicial de los códigos.
+
+Rama main: es la rama final con estructura de código final y con versión final de código metiendo ollama.
+
+
