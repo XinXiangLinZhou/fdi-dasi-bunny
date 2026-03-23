@@ -3,7 +3,7 @@ import os
 
 # ===== Configuración del servidor central =====
 # URL del servidor del profesor para registrar agentes y obtener información
-SERVER_URL = os.getenv("SERVER_URL", "http://172.16.82.142:7719/")
+SERVER_URL = os.getenv("SERVER_URL", "http://147.96.81.252:7719/")
 
 
 # ===== Configuración de Ollama =====
@@ -14,7 +14,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "ministral-3:8b")
 
 # ===== Configuración del agente =====
 # Identidad y parámetros de red del agente
-MY_ALIAS = os.getenv("ALIAS", "bunny12345")
+MY_ALIAS = os.getenv("ALIAS", "bunny")
 MY_PORT = int(os.getenv("PORT", "7720"))
 MY_HOST = os.getenv("HOST", "127.0.0.1")
 
