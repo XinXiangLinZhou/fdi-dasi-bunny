@@ -7,7 +7,7 @@ from app.state import chat_history, chat_status, post_objects, lock
 from services.server_api import getRecursos, getObjetivo, getGenteAlias, postObject
 
 
-
+# Herramienta disponible para cerrar un intercambio válido
 TOOLS = [
     {
         "type": "function",
@@ -37,6 +37,8 @@ TOOLS = [
     }
 ]
 
+
+# Función: calcula los recursos que todavía faltan para cumplir el objetivo
 def calcular_faltantes(recursos: dict, objetivo: dict) -> dict:
     faltantes = {}
     for r, meta in (objetivo or {}).items():
@@ -47,6 +49,7 @@ def calcular_faltantes(recursos: dict, objetivo: dict) -> dict:
     return faltantes
 
 
+# Función: calcula qué recursos se pueden ofrecer sin perjudicar el objetivo propio
 def calcular_ofrecibles(recursos: dict, objetivo: dict) -> dict:
     ofrecibles = {}
     for r, actual in (recursos or {}).items():
@@ -67,11 +70,13 @@ def calcular_ofrecibles(recursos: dict, objetivo: dict) -> dict:
     return ofrecibles
 
 
+# Función: calcula cuánto oro se puede usar sin bajar de una reserva mínima
 def calcular_oro_disponible(recursos: dict, reserva_min=10):
     oro = int(recursos.get("oro", 0))
     return max(0, oro - reserva_min)
 
 
+# Función: inicializa el historial y el estado del chat si no existen
 def ensure_chat(ip: str):
     with lock:
         if ip not in chat_history:
@@ -80,6 +85,7 @@ def ensure_chat(ip: str):
             chat_status[ip] = "chatting"
 
 
+# Función: añade un mensaje al historial del chat y limita su tamaño
 def add_history(ip: str, role: str, text: str):
     ensure_chat(ip)
     with lock:
@@ -90,6 +96,8 @@ def add_history(ip: str, role: str, text: str):
         if len(chat_history[ip]) > MAX_HISTORY:
             chat_history[ip] = chat_history[ip][-MAX_HISTORY:]
 
+
+# Función: interpreta una propuesta simple escrita por el otro jugador
 def extraer_propuesta_del_otro(texto: str) -> dict | None:
     """
     Interpreta mensajes simples del otro tipo:
@@ -124,6 +132,8 @@ def extraer_propuesta_del_otro(texto: str) -> dict | None:
         "yo_doy": {res_want: qty_want},
     }
 
+
+# Función principal: genera la respuesta del agente usando Ollama y el contexto del juego
 def generar_respuesta_ollama(ip: str) -> dict:
     recursos = getRecursos() or {}
     objetivo = getObjetivo() or {}
@@ -186,6 +196,9 @@ REGLAS OBLIGATORIAS:
 - Nunca ofrezcas recursos que todavía necesitas
 - Nunca inventes recursos
 - Nunca hagas intercambios de muchos por muchos
+- REGLA CRÍTICA (NO FALLAR),Cuando alguien dice "X por Y":
+	- El otro jugador TE DA X
+	- El otro jugador QUIERE Y
 - Solo puedes proponer o aceptar intercambios que estén en "INTERCAMBIOS VÁLIDOS QUE SÍ PUEDES HACER"
 - Si el otro te ofrece algo que tú no necesitas, rechaza o haz contraoferta
 - Si el otro te pide algo que tú no puedes dar, rechaza o haz contraoferta
@@ -193,6 +206,7 @@ REGLAS OBLIGATORIAS:
 - Si no puedes hacer un intercambio válido, responde con texto corto
 - Si no tienes ningún intercambio válido posible, responde solo con texto
 - No uses oro en finish_trade
+- Si el otro ya te entregó el recurso acordado, tú igualmente debes completar tu parte del intercambio acordado si sigue siendo un give válido para ti.
 
 Ejemplo válido desde TU perspectiva:
 give={{"madera": 1}}
@@ -249,6 +263,8 @@ Responde corto y natural.
             "content": "Tengo algunos recursos para intercambiar. ¿Qué tienes tú y qué necesitas?"
         }
 
+
+# Función: obtiene el último mensaje enviado por el otro jugador
 def obtener_ultimo_mensaje_del_otro(history: list) -> str:
     for msg in reversed(history):
         if msg.get("role") == "user":
@@ -257,6 +273,8 @@ def obtener_ultimo_mensaje_del_otro(history: list) -> str:
                 return content.strip()
     return ""
 
+
+# Función: ejecuta la herramienta solicitada por Ollama y valida el intercambio
 def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
     fn = tool_call.get("function", {})
     name = fn.get("name")
@@ -281,10 +299,21 @@ def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
         recursos = getRecursos() or {}
         objetivo = getObjetivo() or {}
 
-        if not validar_trade(give, receive, recursos, objetivo):
+        if not validar_trade(give, receive, recursos, objetivo, strict_need_check=False):
             return {
                 "ok": False,
                 "message": "Ese intercambio no es válido para mí.",
+                "trade": None
+            }
+
+        try:
+            if give:
+                postObject(ip, give)
+        except Exception as e:
+            print("postObject error:", e)
+            return {
+                "ok": False,
+                "message": "No pude completar el envío de mi recurso.",
                 "trade": None
             }
 
@@ -295,12 +324,6 @@ def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
                 "receive": receive
             }
             chat_status[ip] = "success"
-
-        try:
-            if give:
-                postObject(ip, give)
-        except Exception as e:
-            print("postObject error:", e)
 
         return {
             "ok": True,
@@ -318,64 +341,66 @@ def ejecutar_tool_call(ip: str, tool_call: dict) -> dict:
     }
 
 
+# Función: devuelve el estado actual de una conversación
 def get_chat_status(ip: str) -> str:
     ensure_chat(ip)
     with lock:
         return chat_status.get(ip, "chatting")
 
 
+# Función: devuelve cuántos mensajes hay en el historial de un chat
 def get_history_length(ip: str) -> int:
     ensure_chat(ip)
     with lock:
         return len(chat_history.get(ip, []))
 
 
+# Función: limpia toda la información asociada a un chat
 def clear_chat(ip: str):
     with lock:
         chat_history.pop(ip, None)
         chat_status.pop(ip, None)
         post_objects.pop(ip, None)
 
-def validar_trade(give: dict, receive: dict, recursos: dict, objetivo: dict):
+
+# Función: comprueba si un intercambio cumple las reglas del juego
+def validar_trade(give: dict, receive: dict, recursos: dict, objetivo: dict, strict_need_check=True):
     give = normalizar_trade_dict(give)
     receive = normalizar_trade_dict(receive)
 
     ofrecibles = calcular_ofrecibles(recursos, objetivo)
     faltantes = calcular_faltantes(recursos, objetivo)
 
-    # 1) 必须严格 1 换 1
     if not es_trade_uno_a_uno(give, receive):
         return False
 
     give_r, give_v = next(iter(give.items()))
     recv_r, recv_v = next(iter(receive.items()))
 
-    # 2) 先禁用 oro，避免模型拿黄金乱换
     if give_r == "oro" or recv_r == "oro":
         return False
 
-    # 3) 不能把自己需要的东西送出去
     if give_r in faltantes:
         return False
 
-    # 4) 送出去的必须真的是“可给的”
     if ofrecibles.get(give_r, 0) < give_v:
         return False
 
-    # 5) 收到的必须是自己缺的
-    if recv_r not in faltantes:
-        return False
+    # 只有严格模式才检查“我现在还缺不缺收到的东西”
+    if strict_need_check:
+        if recv_r not in faltantes:
+            return False
 
-    # 6) 收到数量不能超过当前缺口（这里因为一换一，本质上就是必须为1）
-    if faltantes.get(recv_r, 0) < recv_v:
-        return False
+        if faltantes.get(recv_r, 0) < recv_v:
+            return False
 
-    # 7) 不允许同种资源互换同种资源
     if give_r == recv_r:
         return False
 
     return True
 
+
+# Función: limpia y normaliza el formato de un diccionario de intercambio
 def normalizar_trade_dict(d: dict) -> dict:
     limpio = {}
     if not isinstance(d, dict):
@@ -393,6 +418,7 @@ def normalizar_trade_dict(d: dict) -> dict:
     return limpio
 
 
+# Función: comprueba si el intercambio es estrictamente 1 por 1
 def es_trade_uno_a_uno(give: dict, receive: dict) -> bool:
     if len(give) != 1 or len(receive) != 1:
         return False
@@ -405,12 +431,14 @@ def es_trade_uno_a_uno(give: dict, receive: dict) -> bool:
 
     return True
 
+
+# Función: genera todas las combinaciones de intercambios válidos posibles
 def generar_intercambios_validos(recursos: dict, objetivo: dict) -> list:
     ofrecibles = calcular_ofrecibles(recursos, objetivo)
     faltantes = calcular_faltantes(recursos, objetivo)
 
     intercambios = []
-    for give_r, give_v in ofrecibles.items():
+    for give_r, give_v in ofrecibles.items():  
         if give_v < 1:
             continue
         for recv_r, recv_v in faltantes.items():
